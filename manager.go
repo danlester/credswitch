@@ -18,7 +18,10 @@ type Paths struct {
 }
 
 func defaultPaths() Paths {
-	home, _ := os.UserHomeDir()
+	home := os.Getenv("CREDSWITCH_HOME")
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
 	return Paths{
 		MasterDir:   filepath.Join(home, ".credswitch"),
 		MasterConf:  filepath.Join(home, ".credswitch", "config"),
