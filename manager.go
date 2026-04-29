@@ -29,10 +29,15 @@ func defaultPaths() Paths {
 }
 
 type Profile struct {
-	Name     string
-	InConfig bool
-	InCreds  bool
-	Enabled  bool
+	Name           string
+	InMasterConfig bool
+	InMasterCreds  bool
+	InLiveConfig   bool
+	InLiveCreds    bool
+	// Enabled and Orphan are derived from the four flags above. Stored as
+	// fields so the loop in `list` doesn't recompute on each access.
+	Enabled bool
+	Orphan  bool
 }
 
 type State struct {
@@ -57,10 +62,10 @@ func loadState(p Paths) (*State, error) {
 		return nil, err
 	}
 
-	confLive := nameSet(liveConf)
-	credLive := nameSet(liveCreds)
-	confMaster := nameSet(masterConf)
-	credMaster := nameSet(masterCreds)
+	mc := nameSet(masterConf)
+	mr := nameSet(masterCreds)
+	lc := nameSet(liveConf)
+	lr := nameSet(liveCreds)
 
 	seen := map[string]bool{}
 	var profiles []Profile
@@ -70,19 +75,62 @@ func loadState(p Paths) (*State, error) {
 			return
 		}
 		seen[name] = true
-		profiles = append(profiles, Profile{
-			Name:     name,
-			InConfig: confMaster[name],
-			InCreds:  credMaster[name],
-			Enabled:  isEnabled(name, confMaster, credMaster, confLive, credLive),
-		})
+		prof := Profile{
+			Name:           name,
+			InMasterConfig: mc[name],
+			InMasterCreds:  mr[name],
+			InLiveConfig:   lc[name],
+			InLiveCreds:    lr[name],
+		}
+		// Default is special: it's pass-through, never an orphan, always
+		// considered enabled.
+		if name == defaultProfile {
+			prof.Enabled = true
+		} else if !prof.InMasterConfig && !prof.InMasterCreds {
+			prof.Orphan = true
+			prof.Enabled = prof.InLiveConfig || prof.InLiveCreds
+		} else {
+			// Master-known: enabled iff every master file that contains it
+			// also has it in the corresponding live file.
+			enabled := true
+			if prof.InMasterConfig && !prof.InLiveConfig {
+				enabled = false
+			}
+			if prof.InMasterCreds && !prof.InLiveCreds {
+				enabled = false
+			}
+			prof.Enabled = enabled
+		}
+		profiles = append(profiles, prof)
 	}
 
+	// Master-known profiles in master order.
 	for _, s := range masterConf {
 		add(s.Name)
 	}
 	for _, s := range masterCreds {
 		add(s.Name)
+	}
+	// Default may exist only in live (rare); add it explicitly.
+	if !seen[defaultProfile] && (lc[defaultProfile] || lr[defaultProfile]) {
+		add(defaultProfile)
+	}
+	// Orphans — present in live, missing from master in both files.
+	for _, s := range liveConf {
+		if s.Name == defaultProfile {
+			continue
+		}
+		if !mc[s.Name] && !mr[s.Name] {
+			add(s.Name)
+		}
+	}
+	for _, s := range liveCreds {
+		if s.Name == defaultProfile {
+			continue
+		}
+		if !mc[s.Name] && !mr[s.Name] {
+			add(s.Name)
+		}
 	}
 	return &State{Profiles: profiles}, nil
 }
@@ -100,21 +148,6 @@ func nameSet(sections []Section) map[string]bool {
 		m[s.Name] = true
 	}
 	return m
-}
-
-// A profile is enabled when every master file that defines it also has it
-// in the corresponding live file. Default is treated as always enabled.
-func isEnabled(name string, confMaster, credMaster, confLive, credLive map[string]bool) bool {
-	if name == defaultProfile {
-		return true
-	}
-	if confMaster[name] && !confLive[name] {
-		return false
-	}
-	if credMaster[name] && !credLive[name] {
-		return false
-	}
-	return confMaster[name] || credMaster[name]
 }
 
 type DriftKind int
@@ -343,8 +376,12 @@ func currentEnabled(p Paths) (map[string]bool, error) {
 }
 
 func enableProfile(p Paths, name string) error {
-	if !profileExists(p, name) {
-		return fmt.Errorf("profile %q not found in master at %s — run `credswitch sync %s` first if it only exists in ~/.aws/", name, p.MasterDir, name)
+	prof, ok := findProfile(p, name)
+	if !ok {
+		return fmt.Errorf("profile %q not found in master or in ~/.aws/", name)
+	}
+	if prof.Orphan {
+		return fmt.Errorf("profile %q exists in ~/.aws/ but not in master — run `credswitch sync %s` to add it to master, then enable", name, name)
 	}
 	en, err := currentEnabled(p)
 	if err != nil {
@@ -358,15 +395,32 @@ func disableProfile(p Paths, name string) error {
 	if name == defaultProfile {
 		return fmt.Errorf("cannot disable the default profile")
 	}
-	if !profileExists(p, name) {
-		return fmt.Errorf("profile %q not found in master at %s", name, p.MasterDir)
+	if _, ok := findProfile(p, name); !ok {
+		return fmt.Errorf("profile %q not found in master or in ~/.aws/", name)
 	}
 	en, err := currentEnabled(p)
 	if err != nil {
 		return err
 	}
 	delete(en, name)
+	// apply() with ignoreDriftFor=name covers both the master-known case
+	// (remove from live, drift on this name auto-resolved) and the orphan
+	// case (live entry just gets dropped on rewrite — buildLive only
+	// emits master-known sections).
 	return apply(p, en, name)
+}
+
+func findProfile(p Paths, name string) (Profile, bool) {
+	st, err := loadState(p)
+	if err != nil {
+		return Profile{}, false
+	}
+	for _, prof := range st.Profiles {
+		if prof.Name == name {
+			return prof, true
+		}
+	}
+	return Profile{}, false
 }
 
 // syncToMaster copies a single profile from live to master in whichever file(s)
@@ -429,19 +483,6 @@ func upsertSection(secs []Section, sec Section) []Section {
 		}
 	}
 	return append(secs, sec)
-}
-
-func profileExists(p Paths, name string) bool {
-	st, err := loadState(p)
-	if err != nil {
-		return false
-	}
-	for _, prof := range st.Profiles {
-		if prof.Name == name {
-			return true
-		}
-	}
-	return false
 }
 
 // initMaster copies the user's existing ~/.aws files into ~/.credswitch.

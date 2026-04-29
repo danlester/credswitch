@@ -15,11 +15,14 @@ var (
 	disabledStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	helpStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	orphanStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214")) // amber
+	driftStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 )
 
 type tuiModel struct {
 	paths    Paths
 	profiles []Profile
+	drifted  map[string]bool
 	cursor   int
 	err      error
 }
@@ -34,7 +37,15 @@ func runTUI(p Paths) error {
 		fmt.Println("Run `credswitch init` first to bootstrap from ~/.aws/.")
 		return nil
 	}
-	_, err = tea.NewProgram(tuiModel{paths: p, profiles: st.Profiles}).Run()
+	drift, err := loadDrift(p)
+	if err != nil {
+		return err
+	}
+	_, err = tea.NewProgram(tuiModel{
+		paths:    p,
+		profiles: st.Profiles,
+		drifted:  driftedNames(drift),
+	}).Run()
 	return err
 }
 
@@ -92,6 +103,12 @@ func (m tuiModel) toggle() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.profiles = st.Profiles
+	drift, driftErr := loadDrift(m.paths)
+	if driftErr != nil {
+		m.err = driftErr
+		return m, nil
+	}
+	m.drifted = driftedNames(drift)
 	if m.cursor >= len(m.profiles) {
 		m.cursor = len(m.profiles) - 1
 	}
@@ -114,11 +131,19 @@ func (m tuiModel) View() string {
 			mark = "[x]"
 			nameStyle = enabledStyle
 		}
-		fmt.Fprintf(&b, "%s%s %s %s\n",
+		annot := ""
+		switch {
+		case p.Orphan:
+			annot = "  " + orphanStyle.Render("ORPHAN")
+		case m.drifted[p.Name]:
+			annot = "  " + driftStyle.Render("DRIFTED")
+		}
+		fmt.Fprintf(&b, "%s%s %s %s%s\n",
 			cursor,
 			mark,
 			nameStyle.Render(fmt.Sprintf("%-30s", p.Name)),
 			helpStyle.Render(locationLabel(p)),
+			annot,
 		)
 	}
 

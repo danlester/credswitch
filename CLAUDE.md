@@ -49,6 +49,12 @@ There's no separate package boundary. If this grows, the natural split is
   content differs). Comparison is via `sectionsEqual` which normalizes
   to a sorted `key=value` list (comments, blank lines, whitespace, key
   order ignored).
+- **Orphans show up in `loadState`** with `Orphan: true`. They appear in
+  `list` and the TUI annotated as `ORPHAN`. Profile struct tracks four
+  presence flags (`InMaster{Config,Creds}`, `InLive{Config,Creds}`) plus
+  derived `Enabled` and `Orphan`. `enableProfile` rejects orphans (they
+  must be synced first), `disableProfile` allows them (the rewrite drops
+  any name not in master, so orphans simply disappear from live).
 - **`ignoreDriftFor`**: `apply()` takes a profile name whose drift is
   exempt from the block. `enableProfile`/`disableProfile` pass the name
   being toggled, so `enable foo` on a drifted foo succeeds (master wins,

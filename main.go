@@ -62,7 +62,10 @@ var listCmd = &cobra.Command{
 				marker = "x"
 			}
 			annot := ""
-			if drifted[prof.Name] {
+			switch {
+			case prof.Orphan:
+				annot = "  ORPHAN"
+			case drifted[prof.Name]:
 				annot = "  DRIFTED"
 			}
 			fmt.Printf("[%s] %-30s %s%s\n", marker, prof.Name, locationLabel(prof), annot)
@@ -121,12 +124,21 @@ var disableCmd = &cobra.Command{
 }
 
 func locationLabel(p Profile) string {
+	// For orphans, "where it exists" means the live files (master is empty
+	// for them by definition). For master-known profiles, show the master
+	// presence — that's what enable/disable actually targets.
+	var inConfig, inCreds bool
+	if p.Orphan {
+		inConfig, inCreds = p.InLiveConfig, p.InLiveCreds
+	} else {
+		inConfig, inCreds = p.InMasterConfig, p.InMasterCreds
+	}
 	switch {
-	case p.InConfig && p.InCreds:
+	case inConfig && inCreds:
 		return "config+creds"
-	case p.InConfig:
+	case inConfig:
 		return "config"
-	case p.InCreds:
+	case inCreds:
 		return "creds"
 	}
 	return ""
