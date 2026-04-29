@@ -74,26 +74,31 @@ instead — it's just an INI file.
 
 ### Drift detection
 
-The live files are derived from master, so any disagreement between them is a
-problem. `credswitch` detects two kinds and refuses to rewrite the live
-files until you resolve them:
+The live files can disagree with master in two ways:
 
 - **Orphan**: a profile exists in `~/.aws/` but not in master (e.g. you ran
   `aws configure --profile newone` directly).
-- **Drifted**: the same profile exists in both, but the contents differ (e.g.
+- **Drifted**: the same profile exists in both but the contents differ (e.g.
   you changed a region inline in `~/.aws/config`).
 
-Both are surfaced by `credswitch list` and in the error you get when toggling
-something. The output shows a per-profile diff and the three resolution paths:
+Both are surfaced in `credswitch list` and the TUI with `ORPHAN` / `DRIFTED`
+annotations. The bottom of `list` shows a per-profile diff. **They don't
+block unrelated operations** — you can disable an orphan even while another
+profile is drifted, and vice versa.
+
+Resolution paths (each command operates on a single profile):
 
 - `credswitch sync <name>` — keep live's version, copy it into master.
-- `credswitch enable <name>` (or `disable`) — take master's version,
-  overwriting the drifted live entry.
-- Delete the section from `~/.aws/` manually, then retry.
+- `credswitch disable <name>` — drop from live entirely (works for both
+  orphan and drifted; live's version is gone, master's is unaffected).
+- `credswitch disable <name> && credswitch enable <name>` — take master's
+  version, replacing live's drifted edits. (The two-step is the explicit
+  signal that you accept losing the live edits.)
+- Or just delete the section from `~/.aws/` manually.
 
-The toggle commands implicitly resolve drift on the profile being toggled
-(master wins), so `disable foo; enable foo` is the quickest way to reset a
-drifted profile to master.
+`enable` on a profile that's currently in live with drifted content is
+**blocked**, because it would silently overwrite your live edits. The error
+shows the diff and the same three resolution paths.
 
 ### The `[default]` profile is special
 

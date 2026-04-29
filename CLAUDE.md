@@ -43,24 +43,27 @@ There's no separate package boundary. If this grows, the natural split is
   be exactly the kind of credential trail an unwanted reader (including an
   AI agent) could pick up. Recovery is via the master copy, which is the
   whole point of the tool.
-- **Drift detection**: `apply()` calls `computeDrift()` and refuses to run
-  if any non-default profile in live differs from master. Two kinds:
-  `DriftOrphan` (in live, not in master) and `DriftModified` (in both,
-  content differs). Comparison is via `sectionsEqual` which normalizes
-  to a sorted `key=value` list (comments, blank lines, whitespace, key
-  order ignored).
-- **Orphans show up in `loadState`** with `Orphan: true`. They appear in
-  `list` and the TUI annotated as `ORPHAN`. Profile struct tracks four
-  presence flags (`InMaster{Config,Creds}`, `InLive{Config,Creds}`) plus
-  derived `Enabled` and `Orphan`. `enableProfile` rejects orphans (they
-  must be synced first), `disableProfile` allows them (the rewrite drops
-  any name not in master, so orphans simply disappear from live).
-- **`ignoreDriftFor`**: `apply()` takes a profile name whose drift is
-  exempt from the block. `enableProfile`/`disableProfile` pass the name
-  being toggled, so `enable foo` on a drifted foo succeeds (master wins,
-  overwriting live's drifted version). The TUI relies on the same
-  mechanism — it doesn't gate on drift at startup; per-toggle errors
-  surface inline if other profiles are drifted.
+- **Per-profile mutation, not whole-file rewrite**. `enableProfile` and
+  `disableProfile` only touch the named profile's section(s) in live.
+  Every other section — including drifted ones, orphans, comments, and
+  ordering — is preserved as-is. There is no `apply()` / `buildLive()`;
+  those got removed because rewriting the whole file required a
+  global drift block, which deadlocked when two issues were present
+  (each one blocked resolving the other).
+- **Drift detection** still runs (`computeDrift`) and surfaces in `list`
+  / TUI with `ORPHAN` and `DRIFTED` annotations and a per-profile diff.
+  But it only *blocks* in one specific case: `enableProfile` refuses if
+  the profile is currently in live with `DriftModified` content, because
+  enabling would silently overwrite the live edits. Escape via
+  `sync` (live wins) or `disable` then `enable` (master wins).
+- **`disable` is always permissive**. Removes the named profile's
+  sections from both live files. Works on master-known and orphan
+  profiles alike. No drift check — there's no overwrite to fear.
+- **Orphans in `loadState`**. Profile struct tracks four presence flags
+  (`InMaster{Config,Creds}`, `InLive{Config,Creds}`) plus derived
+  `Enabled` and `Orphan`. Orphans appear in `list` and the TUI with the
+  `ORPHAN` annotation. `enableProfile` rejects them (they must be
+  synced first); `disableProfile` removes them like anything else.
 - **Default profile** (`[default]`):
   - **Pass-through in apply**: `buildLive()` keeps live's default if
     present; falls back to master's default only when live has none.
