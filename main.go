@@ -29,9 +29,10 @@ var initCmd = &cobra.Command{
 		if err := initMaster(p); err != nil {
 			return err
 		}
-		fmt.Printf("Master files copied to %s\n", p.MasterDir)
-		fmt.Println("Live files in ~/.aws/ are unchanged. Run `credswitch disable <name>`")
-		fmt.Println("or use the TUI (`credswitch`) to start trimming them.")
+		out := cmd.OutOrStdout()
+		fmt.Fprintf(out, "Master files copied to %s\n", p.MasterDir)
+		fmt.Fprintln(out, "Live files in ~/.aws/ are unchanged. Run `credswitch disable <name>`")
+		fmt.Fprintln(out, "or use the TUI (`credswitch`) to start trimming them.")
 		return nil
 	},
 }
@@ -51,9 +52,10 @@ var listCmd = &cobra.Command{
 			return err
 		}
 		drifted := driftedNames(drift)
+		out := cmd.OutOrStdout()
 
 		if len(st.Profiles) == 0 && len(drift) == 0 {
-			fmt.Println("No profiles found. Run `credswitch init` to bootstrap from ~/.aws/.")
+			fmt.Fprintln(out, "No profiles found. Run `credswitch init` to bootstrap from ~/.aws/.")
 			return nil
 		}
 		for _, prof := range st.Profiles {
@@ -68,11 +70,11 @@ var listCmd = &cobra.Command{
 			case drifted[prof.Name]:
 				annot = "  DRIFTED"
 			}
-			fmt.Printf("[%s] %-30s %s%s\n", marker, prof.Name, locationLabel(prof), annot)
+			fmt.Fprintf(out, "[%s] %-30s %s%s\n", marker, prof.Name, locationLabel(prof), annot)
 		}
 		if len(drift) > 0 {
-			fmt.Println()
-			fmt.Println(formatDrift(drift))
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, formatDrift(drift))
 		}
 		return nil
 	},
@@ -89,7 +91,7 @@ or to adopt an orphan profile that you want to keep.`,
 		if err := syncToMaster(defaultPaths(), args[0]); err != nil {
 			return err
 		}
-		fmt.Printf("Synced %s from ~/.aws/ into master\n", args[0])
+		fmt.Fprintf(cmd.OutOrStdout(), "Synced %s from ~/.aws/ into master\n", args[0])
 		return nil
 	},
 }
@@ -109,7 +111,7 @@ Errors if the profile has no drift; use enable or disable instead.`,
 		if err := revertProfile(defaultPaths(), args[0]); err != nil {
 			return err
 		}
-		fmt.Printf("Reverted %s to master's version\n", args[0])
+		fmt.Fprintf(cmd.OutOrStdout(), "Reverted %s to master's version\n", args[0])
 		return nil
 	},
 }
@@ -122,7 +124,7 @@ var enableCmd = &cobra.Command{
 		if err := enableProfile(defaultPaths(), args[0]); err != nil {
 			return err
 		}
-		fmt.Printf("Enabled %s\n", args[0])
+		fmt.Fprintf(cmd.OutOrStdout(), "Enabled %s\n", args[0])
 		return nil
 	},
 }
@@ -135,7 +137,7 @@ var disableCmd = &cobra.Command{
 		if err := disableProfile(defaultPaths(), args[0]); err != nil {
 			return err
 		}
-		fmt.Printf("Disabled %s\n", args[0])
+		fmt.Fprintf(cmd.OutOrStdout(), "Disabled %s\n", args[0])
 		return nil
 	},
 }
@@ -161,8 +163,11 @@ func locationLabel(p Profile) string {
 	return ""
 }
 
-func main() {
+func init() {
 	rootCmd.AddCommand(initCmd, listCmd, enableCmd, disableCmd, syncCmd, revertCmd)
+}
+
+func main() {
 	if err := rootCmd.Execute(); err != nil {
 		// Cobra already printed the error; just exit non-zero.
 		os.Exit(1)
