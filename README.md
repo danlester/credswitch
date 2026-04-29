@@ -64,13 +64,25 @@ The `[default]` profile is always kept enabled.
 ## How it works
 
 Each `enable` / `disable` rewrites both live files atomically (temp file +
-rename). Before writing, the previous live files are saved to `*.bak`. The new
-files contain the `[default]` block plus any enabled profile, in the order they
-appear in master.
+rename). The new files contain the `[default]` block plus any enabled profile,
+in the order they appear in master.
 
 Because the live files are fully derived from master, **manual edits to
 `~/.aws/config` will be lost** the next time you toggle anything. Edit master
 instead — it's just an INI file.
+
+### Orphan detection
+
+If something writes a profile into `~/.aws/config` or `~/.aws/credentials` that
+doesn't exist in master (for example, `aws configure` adding a new profile
+directly), `credswitch` refuses to rewrite the live files until you resolve
+it. The error and `credswitch list` both name the orphans. Resolve by either:
+
+1. Copying the section into `~/.credswitch/config` (or `credentials`), or
+2. Deleting it from `~/.aws/`.
+
+This trade-off is deliberate: silent loss of credentials is worse than a
+loud error.
 
 ## Project layout
 

@@ -39,12 +39,19 @@ There's no separate package boundary. If this grows, the natural split is
   written to by this tool — only read.
 - **Atomic writes**: `awsfile.atomicWrite` uses tmp-in-same-dir + rename,
   so partial writes can never corrupt `~/.aws/config`.
-- **Backups**: every `apply` writes `*.bak` of the previous live files
-  before overwriting. Cheap insurance.
+- **No backups**. We deliberately do not write `*.bak` files — they would
+  be exactly the kind of credential trail an unwanted reader (including an
+  AI agent) could pick up. Recovery is via the master copy, which is the
+  whole point of the tool.
+- **Orphan detection**: `apply()` calls `findOrphans()` and refuses to run
+  if `~/.aws/` contains any profile not in master. Same check gates the
+  TUI on startup. The default profile is exempt (its content is allowed
+  to drift; we always rewrite it from master).
 - **Default profile**: always kept enabled. `disableProfile("default")`
   returns an error. The TUI also blocks toggling it.
-- **Manual edits to live files are clobbered** on the next toggle, by
-  design. Edit master instead.
+- **Manual edits to live files** to existing profiles are clobbered on
+  the next toggle, by design. Edit master instead. *New* profiles in live
+  trigger orphan detection — they aren't silently lost.
 
 ## Running locally
 
@@ -70,6 +77,8 @@ go install .          # drops binary in ~/go/bin
 ## Likely future work
 
 - Add `credswitch status <name>` for scripting (exit 0 if enabled, 1 if not).
+- Add `credswitch import <name>` to move an orphan into master in one step
+  (currently the user has to copy the section by hand).
 - Filter/search in the TUI (`/` prefix, fuzzy match).
 - Group-by-prefix display in the TUI (`workstuff*` collapsed into a section).
 - Tests, especially for the parser's edge cases.

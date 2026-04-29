@@ -41,7 +41,8 @@ var listCmd = &cobra.Command{
 	Aliases: []string{"ls"},
 	Short:   "List all profiles and their enabled state",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		st, err := loadState(defaultPaths())
+		p := defaultPaths()
+		st, err := loadState(p)
 		if err != nil {
 			return err
 		}
@@ -49,12 +50,25 @@ var listCmd = &cobra.Command{
 			fmt.Println("No profiles found. Run `credswitch init` to bootstrap from ~/.aws/.")
 			return nil
 		}
-		for _, p := range st.Profiles {
+		for _, prof := range st.Profiles {
 			marker := " "
-			if p.Enabled {
+			if prof.Enabled {
 				marker = "x"
 			}
-			fmt.Printf("[%s] %-30s %s\n", marker, p.Name, locationLabel(p))
+			fmt.Printf("[%s] %-30s %s\n", marker, prof.Name, locationLabel(prof))
+		}
+		orphans, err := loadOrphans(p)
+		if err != nil {
+			return err
+		}
+		if len(orphans) > 0 {
+			fmt.Println()
+			fmt.Println("Unmanaged entries in ~/.aws/ (not in master):")
+			for _, o := range orphans {
+				fmt.Println("  -", o)
+			}
+			fmt.Println()
+			fmt.Println("These block enable/disable. Move them into ~/.credswitch/ or remove from ~/.aws/.")
 		}
 		return nil
 	},

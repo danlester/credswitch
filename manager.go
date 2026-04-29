@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const defaultProfile = "default"
@@ -117,8 +118,8 @@ func isEnabled(name string, confMaster, credMaster, confLive, credLive map[strin
 }
 
 // apply rewrites both live files from master, keeping only the [default]
-// section plus any profile in `enabled`. Live files are backed up to .bak
-// first.
+// section plus any profile in `enabled`. Refuses to run if the live files
+// contain any profile not present in master (would be silent data loss).
 func apply(p Paths, enabled map[string]bool) error {
 	masterConf, err := loadOrEmpty(p.MasterConf, KindConfig)
 	if err != nil {
@@ -127,6 +128,21 @@ func apply(p Paths, enabled map[string]bool) error {
 	masterCreds, err := loadOrEmpty(p.MasterCreds, KindCreds)
 	if err != nil {
 		return err
+	}
+
+	orphans, err := findOrphans(p, masterConf, masterCreds)
+	if err != nil {
+		return err
+	}
+	if len(orphans) > 0 {
+		return fmt.Errorf(
+			"refusing to rewrite ~/.aws/: %d profile(s) exist in live files but not in master:\n  %s\n\n"+
+				"These would be erased. Resolve by either:\n"+
+				"  1. Copying the missing sections into ~/.credswitch/config or ~/.credswitch/credentials, or\n"+
+				"  2. Deleting them from ~/.aws/config or ~/.aws/credentials if you don't need them.\n"+
+				"Then retry. (`credswitch list` also shows orphans.)",
+			len(orphans), strings.Join(orphans, "\n  "),
+		)
 	}
 
 	keep := func(name string) bool {
@@ -145,27 +161,59 @@ func apply(p Paths, enabled map[string]bool) error {
 		}
 	}
 
-	if err := backup(p.LiveConf); err != nil {
-		return err
-	}
-	if err := backup(p.LiveCreds); err != nil {
-		return err
-	}
 	if err := writeSections(p.LiveConf, newConf); err != nil {
 		return err
 	}
 	return writeSections(p.LiveCreds, newCreds)
 }
 
-func backup(path string) error {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
+// findOrphans returns names of profiles present in the live files but not in
+// master, formatted as "config:<name>" or "credentials:<name>". The default
+// profile is exempt (it's tool-managed and content is allowed to differ).
+func findOrphans(p Paths, masterConf, masterCreds []Section) ([]string, error) {
+	liveConf, err := loadOrEmpty(p.LiveConf, KindConfig)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return os.WriteFile(path+".bak", data, 0o600)
+	liveCreds, err := loadOrEmpty(p.LiveCreds, KindCreds)
+	if err != nil {
+		return nil, err
+	}
+	confMaster := nameSet(masterConf)
+	credMaster := nameSet(masterCreds)
+	var orphans []string
+	for _, s := range liveConf {
+		if s.Name == defaultProfile {
+			continue
+		}
+		if !confMaster[s.Name] {
+			orphans = append(orphans, "config:"+s.Name)
+		}
+	}
+	for _, s := range liveCreds {
+		if s.Name == defaultProfile {
+			continue
+		}
+		if !credMaster[s.Name] {
+			orphans = append(orphans, "credentials:"+s.Name)
+		}
+	}
+	return orphans, nil
+}
+
+// loadOrphans is a convenience wrapper for callers that just need the list
+// of orphans (e.g. `list`, TUI startup) and don't have master sections in
+// hand already.
+func loadOrphans(p Paths) ([]string, error) {
+	masterConf, err := loadOrEmpty(p.MasterConf, KindConfig)
+	if err != nil {
+		return nil, err
+	}
+	masterCreds, err := loadOrEmpty(p.MasterCreds, KindCreds)
+	if err != nil {
+		return nil, err
+	}
+	return findOrphans(p, masterConf, masterCreds)
 }
 
 func currentEnabled(p Paths) (map[string]bool, error) {
