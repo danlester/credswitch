@@ -50,15 +50,13 @@ There's no separate package boundary. If this grows, the natural split is
   those got removed because rewriting the whole file required a
   global drift block, which deadlocked when two issues were present
   (each one blocked resolving the other).
-- **Drift detection** still runs (`computeDrift`) and surfaces in `list`
-  / TUI with `ORPHAN` and `DRIFTED` annotations and a per-profile diff.
-  But it only *blocks* in one specific case: `enableProfile` refuses if
-  the profile is currently in live with `DriftModified` content, because
-  enabling would silently overwrite the live edits. Escape via
-  `sync` (live wins) or `disable` then `enable` (master wins).
-- **`disable` is always permissive**. Removes the named profile's
-  sections from both live files. Works on master-known and orphan
-  profiles alike. No drift check — there's no overwrite to fear.
+- **Strict drift gate**: `enableProfile`, `disableProfile`, and the TUI
+  toggle are all blocked for any profile in drift or orphan state.
+  `requireClean()` is the gate, called from each. Resolution is via the
+  two explicit commands `sync` (live → master, keep edits) and `revert`
+  (master → live; for orphans, removes from live). Both commands reduce
+  a profile to clean state, after which enable/disable works again.
+  Drift on X never gates operations on Y — each profile is independent.
 - **Orphans in `loadState`**. Profile struct tracks four presence flags
   (`InMaster{Config,Creds}`, `InLive{Config,Creds}`) plus derived
   `Enabled` and `Orphan`. Orphans appear in `list` and the TUI with the
@@ -72,10 +70,12 @@ There's no separate package boundary. If this grows, the natural split is
   - **Always considered enabled**. `disableProfile("default")` errors;
     the TUI also blocks toggling it.
 - **Resolution paths exposed to the user**:
-  - `credswitch sync <name>` — live → master (one profile).
-  - `credswitch enable/disable <name>` — master → live (toggle, with
-    drift on the toggled profile auto-resolved).
-  - Manual deletion from `~/.aws/`.
+  - `credswitch sync <name>` — live → master (keep live's edits).
+  - `credswitch revert <name>` — master → live (master wins; for orphans,
+    removes from live).
+  - In the TUI: `s` and `r` keys run sync and revert on the highlighted
+    profile.
+  - Manual deletion from `~/.aws/` is also fine.
 
 ## Running locally
 

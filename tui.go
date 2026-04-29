@@ -72,45 +72,71 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "G", "end":
 		m.cursor = len(m.profiles) - 1
 	case " ", "enter", "x":
-		return m.toggle()
+		return m.runOnCurrent(toggleAction)
+	case "s":
+		return m.runOnCurrent(syncAction)
+	case "r":
+		return m.runOnCurrent(revertAction)
 	}
 	return m, nil
 }
 
-func (m tuiModel) toggle() (tea.Model, tea.Cmd) {
+type tuiAction int
+
+const (
+	toggleAction tuiAction = iota
+	syncAction
+	revertAction
+)
+
+func (m tuiModel) runOnCurrent(action tuiAction) (tea.Model, tea.Cmd) {
 	if len(m.profiles) == 0 {
 		return m, nil
 	}
 	prof := m.profiles[m.cursor]
-	if prof.Name == defaultProfile {
-		m.err = fmt.Errorf("default profile is always enabled")
-		return m, nil
-	}
 	var err error
-	if prof.Enabled {
-		err = disableProfile(m.paths, prof.Name)
-	} else {
-		err = enableProfile(m.paths, prof.Name)
+	switch action {
+	case toggleAction:
+		if prof.Name == defaultProfile {
+			m.err = fmt.Errorf("default profile is always enabled")
+			return m, nil
+		}
+		if prof.Enabled {
+			err = disableProfile(m.paths, prof.Name)
+		} else {
+			err = enableProfile(m.paths, prof.Name)
+		}
+	case syncAction:
+		err = syncToMaster(m.paths, prof.Name)
+	case revertAction:
+		err = revertProfile(m.paths, prof.Name)
 	}
 	if err != nil {
 		m.err = err
 		return m, nil
 	}
 	m.err = nil
-	st, reloadErr := loadState(m.paths)
-	if reloadErr != nil {
-		m.err = reloadErr
+	return m.reload()
+}
+
+func (m tuiModel) reload() (tea.Model, tea.Cmd) {
+	st, err := loadState(m.paths)
+	if err != nil {
+		m.err = err
 		return m, nil
 	}
 	m.profiles = st.Profiles
-	drift, driftErr := loadDrift(m.paths)
-	if driftErr != nil {
-		m.err = driftErr
+	drift, err := loadDrift(m.paths)
+	if err != nil {
+		m.err = err
 		return m, nil
 	}
 	m.drifted = driftedNames(drift)
 	if m.cursor >= len(m.profiles) {
 		m.cursor = len(m.profiles) - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
 	}
 	return m, nil
 }
@@ -152,7 +178,7 @@ func (m tuiModel) View() string {
 		b.WriteString(errorStyle.Render("error: " + m.err.Error()))
 		b.WriteString("\n")
 	}
-	b.WriteString(helpStyle.Render("up/down move · space toggle · q quit"))
+	b.WriteString(helpStyle.Render("up/down move · space toggle · s sync · r revert · q quit"))
 	b.WriteString("\n")
 	return b.String()
 }

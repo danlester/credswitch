@@ -54,10 +54,13 @@ them with `disable` or via the TUI.
 ```sh
 credswitch                  # interactive TUI (up/down + space to toggle)
 credswitch list             # show all profiles and their state
-credswitch enable <name>    # add <name> to the live AWS files (master wins)
+credswitch enable <name>    # add <name> to the live AWS files
 credswitch disable <name>   # remove <name> from the live AWS files
-credswitch sync <name>      # copy <name> from live into master (live wins)
+credswitch sync <name>      # live -> master  (keep live, copy to master)
+credswitch revert <name>    # master -> live  (master wins; for orphans, removes from live)
 ```
+
+In the TUI: `space` toggle, `s` sync, `r` revert, `q` quit.
 
 Profile names are the **bare** name — `workstuffprod1`, not `profile workstuffprod1`.
 The `[default]` profile is always kept enabled and is **pass-through** (see below).
@@ -82,23 +85,23 @@ The live files can disagree with master in two ways:
   you changed a region inline in `~/.aws/config`).
 
 Both are surfaced in `credswitch list` and the TUI with `ORPHAN` / `DRIFTED`
-annotations. The bottom of `list` shows a per-profile diff. **They don't
-block unrelated operations** — you can disable an orphan even while another
-profile is drifted, and vice versa.
+annotations. The bottom of `list` shows a per-profile diff.
 
-Resolution paths (each command operates on a single profile):
+`enable`, `disable`, and the TUI toggle are **all blocked** for any profile
+in drift or orphan state. They would silently destroy live data — either
+overwrite your edits (enable) or delete the orphan content (disable). You
+have to resolve drift explicitly with `sync` or `revert`:
 
 - `credswitch sync <name>` — keep live's version, copy it into master.
-- `credswitch disable <name>` — drop from live entirely (works for both
-  orphan and drifted; live's version is gone, master's is unaffected).
-- `credswitch disable <name> && credswitch enable <name>` — take master's
-  version, replacing live's drifted edits. (The two-step is the explicit
-  signal that you accept losing the live edits.)
-- Or just delete the section from `~/.aws/` manually.
+- `credswitch revert <name>` — make live match master. For drifted profiles,
+  live's content is overwritten with master's. For orphans, the live entry
+  is removed (master has nothing to bring forward).
 
-`enable` on a profile that's currently in live with drifted content is
-**blocked**, because it would silently overwrite your live edits. The error
-shows the diff and the same three resolution paths.
+Both commands reduce the profile to a "clean" state, and `enable` /
+`disable` work normally on it again.
+
+Drift on profile X never blocks operations on profile Y. Each profile is
+gated independently.
 
 ### The `[default]` profile is special
 

@@ -222,11 +222,23 @@ func loadDrift(p Paths) ([]Drift, error) {
 	return computeDrift(liveConf, masterConf, liveCreds, masterCreds), nil
 }
 
-// formatDrift renders drift entries with a per-profile diff and the
-// resolution options. Used for both error messages and `list` output.
+// formatDrift renders drift entries with per-profile diffs and a generic
+// resolution footer. Used by `list` to summarise all drift.
 func formatDrift(drift []Drift) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d profile change(s) in ~/.aws/ not reflected in master:\n\n", len(drift))
+	b.WriteString(renderDrift(drift))
+	b.WriteString("To resolve any of these:\n")
+	b.WriteString("  - keep live's version    ->  credswitch sync <name>     (live -> master)\n")
+	b.WriteString("  - take master's version  ->  credswitch revert <name>   (master -> live;\n")
+	b.WriteString("                                                          for orphans, removes from live)")
+	return b.String()
+}
+
+// renderDrift renders the per-entry diff lines without header or footer.
+// Shared by formatDrift and requireClean.
+func renderDrift(drift []Drift) string {
+	var b strings.Builder
 	for _, d := range drift {
 		switch d.Kind {
 		case DriftModified:
@@ -246,11 +258,6 @@ func formatDrift(drift []Drift) string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("To resolve any of these:\n")
-	b.WriteString("  - keep live's version          ->  credswitch sync <name>\n")
-	b.WriteString("  - drop from live entirely      ->  credswitch disable <name>\n")
-	b.WriteString("  - take master's version (drift only)\n")
-	b.WriteString("                                 ->  credswitch disable <name> && credswitch enable <name>")
 	return b.String()
 }
 
@@ -290,47 +297,81 @@ func driftedNames(drift []Drift) map[string]bool {
 	return m
 }
 
-// enableProfile makes live mirror master for one profile, leaving every other
-// section in live (including drifted and orphan ones) untouched. Refuses if
-// the profile is currently in live with content drift, since enable would
-// silently overwrite the live edits — the user must explicitly choose via
-// disable+enable (master wins) or sync (live wins).
+// enableProfile inserts master's view of a profile into live. Refuses if the
+// profile has drift or orphan state — those are reconciled via sync/revert.
 func enableProfile(p Paths, name string) error {
-	prof, ok := findProfile(p, name)
-	if !ok {
-		return fmt.Errorf("profile %q not found in master or in ~/.aws/", name)
+	if name == defaultProfile {
+		return fmt.Errorf("default profile is pass-through; cannot enable explicitly")
 	}
-	if prof.Orphan {
-		return fmt.Errorf("profile %q exists in ~/.aws/ but not in master — run `credswitch sync %s` to add it to master, then enable", name, name)
-	}
-	masterConf, err := loadOrEmpty(p.MasterConf, KindConfig)
+	masterConf, masterCreds, liveConf, liveCreds, err := loadAllSections(p)
 	if err != nil {
 		return err
 	}
-	masterCreds, err := loadOrEmpty(p.MasterCreds, KindCreds)
-	if err != nil {
-		return err
-	}
-	liveConf, err := loadOrEmpty(p.LiveConf, KindConfig)
-	if err != nil {
-		return err
-	}
-	liveCreds, err := loadOrEmpty(p.LiveCreds, KindCreds)
-	if err != nil {
+	if err := requireClean(p, name, "enable", liveConf, masterConf, liveCreds, masterCreds); err != nil {
 		return err
 	}
 
-	// Block if this specific profile has modified drift in either live
-	// file — enable would silently destroy the live edits.
-	allDrift := computeDrift(liveConf, masterConf, liveCreds, masterCreds)
-	var blocking []Drift
-	for _, d := range allDrift {
-		if d.Name == name && d.Kind == DriftModified {
-			blocking = append(blocking, d)
-		}
+	msc := findSection(masterConf, name)
+	msr := findSection(masterCreds, name)
+	if msc == nil && msr == nil {
+		return fmt.Errorf("profile %q not found in master", name)
 	}
-	if len(blocking) > 0 {
-		return fmt.Errorf("profile %q is currently in ~/.aws/ with edits not in master. Enabling would overwrite those edits.\n\n%s", name, formatDrift(blocking))
+	if msc != nil {
+		liveConf = upsertSection(liveConf, *msc)
+	} else {
+		liveConf = removeSection(liveConf, name)
+	}
+	if msr != nil {
+		liveCreds = upsertSection(liveCreds, *msr)
+	} else {
+		liveCreds = removeSection(liveCreds, name)
+	}
+	if err := writeSections(p.LiveConf, liveConf); err != nil {
+		return err
+	}
+	return writeSections(p.LiveCreds, liveCreds)
+}
+
+// disableProfile removes a profile from both live files. Refuses if the
+// profile has drift or orphan state — disable would silently destroy the
+// drifted/orphaned content.
+func disableProfile(p Paths, name string) error {
+	if name == defaultProfile {
+		return fmt.Errorf("cannot disable the default profile")
+	}
+	masterConf, masterCreds, liveConf, liveCreds, err := loadAllSections(p)
+	if err != nil {
+		return err
+	}
+	if err := requireClean(p, name, "disable", liveConf, masterConf, liveCreds, masterCreds); err != nil {
+		return err
+	}
+	if _, ok := findProfile(p, name); !ok {
+		return fmt.Errorf("profile %q not found in master or in ~/.aws/", name)
+	}
+	liveConf = removeSection(liveConf, name)
+	liveCreds = removeSection(liveCreds, name)
+	if err := writeSections(p.LiveConf, liveConf); err != nil {
+		return err
+	}
+	return writeSections(p.LiveCreds, liveCreds)
+}
+
+// revertProfile makes live match master for one profile (master → live).
+// For DriftModified: live's content is overwritten with master's. For
+// DriftOrphan: live's section is removed (master has nothing to bring
+// forward). Errors if the profile is clean — there's nothing to revert.
+func revertProfile(p Paths, name string) error {
+	if name == defaultProfile {
+		return fmt.Errorf("default profile is pass-through; nothing to revert")
+	}
+	masterConf, masterCreds, liveConf, liveCreds, err := loadAllSections(p)
+	if err != nil {
+		return err
+	}
+	driftHere := driftFor(liveConf, masterConf, liveCreds, masterCreds, name)
+	if len(driftHere) == 0 {
+		return fmt.Errorf("profile %q has no drift to revert (use enable/disable to change its state)", name)
 	}
 
 	msc := findSection(masterConf, name)
@@ -345,36 +386,60 @@ func enableProfile(p Paths, name string) error {
 	} else {
 		liveCreds = removeSection(liveCreds, name)
 	}
-
 	if err := writeSections(p.LiveConf, liveConf); err != nil {
 		return err
 	}
 	return writeSections(p.LiveCreds, liveCreds)
 }
 
-// disableProfile removes a profile from both live files. Other sections in
-// live are untouched. Works on master-known and orphan profiles alike.
-func disableProfile(p Paths, name string) error {
-	if name == defaultProfile {
-		return fmt.Errorf("cannot disable the default profile")
+func loadAllSections(p Paths) (masterConf, masterCreds, liveConf, liveCreds []Section, err error) {
+	if masterConf, err = loadOrEmpty(p.MasterConf, KindConfig); err != nil {
+		return
 	}
-	if _, ok := findProfile(p, name); !ok {
-		return fmt.Errorf("profile %q not found in master or in ~/.aws/", name)
+	if masterCreds, err = loadOrEmpty(p.MasterCreds, KindCreds); err != nil {
+		return
 	}
-	liveConf, err := loadOrEmpty(p.LiveConf, KindConfig)
-	if err != nil {
-		return err
+	if liveConf, err = loadOrEmpty(p.LiveConf, KindConfig); err != nil {
+		return
 	}
-	liveCreds, err := loadOrEmpty(p.LiveCreds, KindCreds)
-	if err != nil {
-		return err
+	liveCreds, err = loadOrEmpty(p.LiveCreds, KindCreds)
+	return
+}
+
+func driftFor(liveConf, masterConf, liveCreds, masterCreds []Section, name string) []Drift {
+	var out []Drift
+	for _, d := range computeDrift(liveConf, masterConf, liveCreds, masterCreds) {
+		if d.Name == name {
+			out = append(out, d)
+		}
 	}
-	liveConf = removeSection(liveConf, name)
-	liveCreds = removeSection(liveCreds, name)
-	if err := writeSections(p.LiveConf, liveConf); err != nil {
-		return err
+	return out
+}
+
+// requireClean errors out if the profile has drift or orphan state, with a
+// focused message pointing at sync/revert for that specific name.
+func requireClean(p Paths, name, action string, liveConf, masterConf, liveCreds, masterCreds []Section) error {
+	d := driftFor(liveConf, masterConf, liveCreds, masterCreds, name)
+	if len(d) == 0 {
+		return nil
 	}
-	return writeSections(p.LiveCreds, liveCreds)
+	allOrphan := true
+	for _, e := range d {
+		if e.Kind != DriftOrphan {
+			allOrphan = false
+			break
+		}
+	}
+	revertHint := "replaces live with master's version"
+	if allOrphan {
+		revertHint = "removes from live (master has nothing to bring forward)"
+	}
+	return fmt.Errorf(
+		"cannot %s profile %q: it differs from master.\n\n%sResolve first with:\n"+
+			"  credswitch sync %s     (keep live, copy to master)\n"+
+			"  credswitch revert %s   (master wins; %s)",
+		action, name, renderDrift(d), name, name, revertHint,
+	)
 }
 
 func removeSection(secs []Section, name string) []Section {

@@ -80,19 +80,36 @@ var listCmd = &cobra.Command{
 
 var syncCmd = &cobra.Command{
 	Use:   "sync <profile>",
-	Short: "Copy a profile from ~/.aws/ into master (live wins for that profile)",
+	Short: "Copy a profile from ~/.aws/ into master (live wins; live -> master)",
 	Long: `sync copies the named profile's section(s) from ~/.aws/ into ~/.credswitch/,
-overwriting whatever was there. Use this to adopt an orphan profile, or to
-resolve drift by keeping the live version.
-
-The opposite direction (master wins, overwriting live) happens automatically
-when you run enable or disable on the same profile.`,
+overwriting whatever was there. Use this to resolve drift in favour of live,
+or to adopt an orphan profile that you want to keep.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := syncToMaster(defaultPaths(), args[0]); err != nil {
 			return err
 		}
 		fmt.Printf("Synced %s from ~/.aws/ into master\n", args[0])
+		return nil
+	},
+}
+
+var revertCmd = &cobra.Command{
+	Use:   "revert <profile>",
+	Short: "Make ~/.aws/ match master for a profile (master wins; master -> live)",
+	Long: `revert resolves drift by taking master's view of the profile.
+
+For drifted profiles, live's content is overwritten with master's.
+For orphan profiles (only in live), the live entry is removed entirely —
+since master has nothing to bring forward.
+
+Errors if the profile has no drift; use enable or disable instead.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := revertProfile(defaultPaths(), args[0]); err != nil {
+			return err
+		}
+		fmt.Printf("Reverted %s to master's version\n", args[0])
 		return nil
 	},
 }
@@ -145,7 +162,7 @@ func locationLabel(p Profile) string {
 }
 
 func main() {
-	rootCmd.AddCommand(initCmd, listCmd, enableCmd, disableCmd, syncCmd)
+	rootCmd.AddCommand(initCmd, listCmd, enableCmd, disableCmd, syncCmd, revertCmd)
 	if err := rootCmd.Execute(); err != nil {
 		// Cobra already printed the error; just exit non-zero.
 		os.Exit(1)
