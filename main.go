@@ -46,7 +46,13 @@ var listCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if len(st.Profiles) == 0 {
+		drift, err := loadDrift(p)
+		if err != nil {
+			return err
+		}
+		drifted := driftedNames(drift)
+
+		if len(st.Profiles) == 0 && len(drift) == 0 {
 			fmt.Println("No profiles found. Run `credswitch init` to bootstrap from ~/.aws/.")
 			return nil
 		}
@@ -55,21 +61,35 @@ var listCmd = &cobra.Command{
 			if prof.Enabled {
 				marker = "x"
 			}
-			fmt.Printf("[%s] %-30s %s\n", marker, prof.Name, locationLabel(prof))
+			annot := ""
+			if drifted[prof.Name] {
+				annot = "  DRIFTED"
+			}
+			fmt.Printf("[%s] %-30s %s%s\n", marker, prof.Name, locationLabel(prof), annot)
 		}
-		orphans, err := loadOrphans(p)
-		if err != nil {
+		if len(drift) > 0 {
+			fmt.Println()
+			fmt.Println(formatDrift(drift))
+		}
+		return nil
+	},
+}
+
+var syncCmd = &cobra.Command{
+	Use:   "sync <profile>",
+	Short: "Copy a profile from ~/.aws/ into master (live wins for that profile)",
+	Long: `sync copies the named profile's section(s) from ~/.aws/ into ~/.credswitch/,
+overwriting whatever was there. Use this to adopt an orphan profile, or to
+resolve drift by keeping the live version.
+
+The opposite direction (master wins, overwriting live) happens automatically
+when you run enable or disable on the same profile.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := syncToMaster(defaultPaths(), args[0]); err != nil {
 			return err
 		}
-		if len(orphans) > 0 {
-			fmt.Println()
-			fmt.Println("Unmanaged entries in ~/.aws/ (not in master):")
-			for _, o := range orphans {
-				fmt.Println("  -", o)
-			}
-			fmt.Println()
-			fmt.Println("These block enable/disable. Move them into ~/.credswitch/ or remove from ~/.aws/.")
-		}
+		fmt.Printf("Synced %s from ~/.aws/ into master\n", args[0])
 		return nil
 	},
 }
@@ -113,9 +133,9 @@ func locationLabel(p Profile) string {
 }
 
 func main() {
-	rootCmd.AddCommand(initCmd, listCmd, enableCmd, disableCmd)
+	rootCmd.AddCommand(initCmd, listCmd, enableCmd, disableCmd, syncCmd)
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		// Cobra already printed the error; just exit non-zero.
 		os.Exit(1)
 	}
 }

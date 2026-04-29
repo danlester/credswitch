@@ -25,13 +25,6 @@ type tuiModel struct {
 }
 
 func runTUI(p Paths) error {
-	orphans, err := loadOrphans(p)
-	if err != nil {
-		return err
-	}
-	if len(orphans) > 0 {
-		return fmt.Errorf("orphan profiles in ~/.aws/ (run `credswitch list` to see them) — resolve before using the TUI")
-	}
 	st, err := loadState(p)
 	if err != nil {
 		return err

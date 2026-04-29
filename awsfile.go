@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 )
 
@@ -74,6 +76,39 @@ func sectionNameFromHeader(header string, kind FileKind) string {
 		return strings.TrimSpace(inner[len("profile "):])
 	}
 	return inner
+}
+
+// normalizeSection returns a sorted list of "key=value" entries for a
+// section, ignoring comments, blank lines, the [header] line, and surrounding
+// whitespace. Two sections with the same logical content normalize to the
+// same slice regardless of ordering or formatting differences.
+func normalizeSection(s Section) []string {
+	var out []string
+	for _, line := range s.Lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[") {
+			continue // header — name is compared separately
+		}
+		if idx := strings.Index(trimmed, "="); idx >= 0 {
+			key := strings.TrimSpace(trimmed[:idx])
+			val := strings.TrimSpace(trimmed[idx+1:])
+			out = append(out, key+"="+val)
+		} else {
+			out = append(out, trimmed)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sectionsEqual(a, b Section) bool {
+	return slices.Equal(normalizeSection(a), normalizeSection(b))
 }
 
 // writeSections writes sections back to disk, separated by a single blank

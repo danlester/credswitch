@@ -54,12 +54,13 @@ them with `disable` or via the TUI.
 ```sh
 credswitch                  # interactive TUI (up/down + space to toggle)
 credswitch list             # show all profiles and their state
-credswitch enable <name>    # add <name> to the live AWS files
+credswitch enable <name>    # add <name> to the live AWS files (master wins)
 credswitch disable <name>   # remove <name> from the live AWS files
+credswitch sync <name>      # copy <name> from live into master (live wins)
 ```
 
 Profile names are the **bare** name — `workstuffprod1`, not `profile workstuffprod1`.
-The `[default]` profile is always kept enabled.
+The `[default]` profile is always kept enabled and is **pass-through** (see below).
 
 ## How it works
 
@@ -71,15 +72,36 @@ Because the live files are fully derived from master, **manual edits to
 `~/.aws/config` will be lost** the next time you toggle anything. Edit master
 instead — it's just an INI file.
 
-### Orphan detection
+### Drift detection
 
-If something writes a profile into `~/.aws/config` or `~/.aws/credentials` that
-doesn't exist in master (for example, `aws configure` adding a new profile
-directly), `credswitch` refuses to rewrite the live files until you resolve
-it. The error and `credswitch list` both name the orphans. Resolve by either:
+The live files are derived from master, so any disagreement between them is a
+problem. `credswitch` detects two kinds and refuses to rewrite the live
+files until you resolve them:
 
-1. Copying the section into `~/.credswitch/config` (or `credentials`), or
-2. Deleting it from `~/.aws/`.
+- **Orphan**: a profile exists in `~/.aws/` but not in master (e.g. you ran
+  `aws configure --profile newone` directly).
+- **Drifted**: the same profile exists in both, but the contents differ (e.g.
+  you changed a region inline in `~/.aws/config`).
+
+Both are surfaced by `credswitch list` and in the error you get when toggling
+something. The output shows a per-profile diff and the three resolution paths:
+
+- `credswitch sync <name>` — keep live's version, copy it into master.
+- `credswitch enable <name>` (or `disable`) — take master's version,
+  overwriting the drifted live entry.
+- Delete the section from `~/.aws/` manually, then retry.
+
+The toggle commands implicitly resolve drift on the profile being toggled
+(master wins), so `disable foo; enable foo` is the quickest way to reset a
+drifted profile to master.
+
+### The `[default]` profile is special
+
+`[default]` is **pass-through**: credswitch never overwrites live's default
+section, and drift detection ignores it. This is so tools like `aws-cli`
+(which write directly to `~/.aws/credentials` for things like key rotation)
+can do their job. If you want to capture changes to default in master, run
+`credswitch sync default`.
 
 This trade-off is deliberate: silent loss of credentials is worse than a
 loud error.

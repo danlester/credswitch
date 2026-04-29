@@ -43,15 +43,30 @@ There's no separate package boundary. If this grows, the natural split is
   be exactly the kind of credential trail an unwanted reader (including an
   AI agent) could pick up. Recovery is via the master copy, which is the
   whole point of the tool.
-- **Orphan detection**: `apply()` calls `findOrphans()` and refuses to run
-  if `~/.aws/` contains any profile not in master. Same check gates the
-  TUI on startup. The default profile is exempt (its content is allowed
-  to drift; we always rewrite it from master).
-- **Default profile**: always kept enabled. `disableProfile("default")`
-  returns an error. The TUI also blocks toggling it.
-- **Manual edits to live files** to existing profiles are clobbered on
-  the next toggle, by design. Edit master instead. *New* profiles in live
-  trigger orphan detection — they aren't silently lost.
+- **Drift detection**: `apply()` calls `computeDrift()` and refuses to run
+  if any non-default profile in live differs from master. Two kinds:
+  `DriftOrphan` (in live, not in master) and `DriftModified` (in both,
+  content differs). Comparison is via `sectionsEqual` which normalizes
+  to a sorted `key=value` list (comments, blank lines, whitespace, key
+  order ignored).
+- **`ignoreDriftFor`**: `apply()` takes a profile name whose drift is
+  exempt from the block. `enableProfile`/`disableProfile` pass the name
+  being toggled, so `enable foo` on a drifted foo succeeds (master wins,
+  overwriting live's drifted version). The TUI relies on the same
+  mechanism — it doesn't gate on drift at startup; per-toggle errors
+  surface inline if other profiles are drifted.
+- **Default profile** (`[default]`):
+  - **Pass-through in apply**: `buildLive()` keeps live's default if
+    present; falls back to master's default only when live has none.
+    This protects credential rotation done via `aws configure`.
+  - **Exempt from drift detection**: `fileDrift` skips it entirely.
+  - **Always considered enabled**. `disableProfile("default")` errors;
+    the TUI also blocks toggling it.
+- **Resolution paths exposed to the user**:
+  - `credswitch sync <name>` — live → master (one profile).
+  - `credswitch enable/disable <name>` — master → live (toggle, with
+    drift on the toggled profile auto-resolved).
+  - Manual deletion from `~/.aws/`.
 
 ## Running locally
 
@@ -77,8 +92,8 @@ go install .          # drops binary in ~/go/bin
 ## Likely future work
 
 - Add `credswitch status <name>` for scripting (exit 0 if enabled, 1 if not).
-- Add `credswitch import <name>` to move an orphan into master in one step
-  (currently the user has to copy the section by hand).
 - Filter/search in the TUI (`/` prefix, fuzzy match).
 - Group-by-prefix display in the TUI (`workstuff*` collapsed into a section).
-- Tests, especially for the parser's edge cases.
+- Show drift state in the TUI itself (currently TUI only shows the post-toggle
+  error if you happen to bump into a drifted profile from elsewhere).
+- Tests, especially for the parser and `sectionsEqual` edge cases.
