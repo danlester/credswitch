@@ -1,0 +1,16 @@
+# Compiled binary in this directory (we install via `go install`, but a stray
+# `go build` will drop one here).
+/credswitch
+
+# Backup files credswitch writes before modifying live AWS files.
+*.bak
+
+# Editor / OS cruft
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Go test/coverage output
+*.out
+coverage.txt
