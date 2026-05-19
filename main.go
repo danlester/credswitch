@@ -145,6 +145,49 @@ var disableCmd = &cobra.Command{
 	},
 }
 
+var (
+	agentHour   int
+	agentMinute int
+)
+
+var installAgentCmd = &cobra.Command{
+	Use:   "install-agent",
+	Short: "Install a macOS LaunchAgent that runs `reap` at login and once a day",
+	Long: `Generates ~/Library/LaunchAgents/com.credswitch.reap.plist pointing at the
+current credswitch binary and loads it via launchctl.
+
+The agent runs on:
+  - every full login (RunAtLoad)
+  - once daily at --hour:--minute (default 04:00). If the Mac is asleep at
+    that time, launchd fires the missed job on the next wake — this is the
+    trigger that effectively catches "first unlock of the day".
+
+Re-run after upgrading or moving the binary; the plist freezes the path at
+install time.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := installAgent(defaultPaths(), agentHour, agentMinute)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Installed and loaded LaunchAgent at %s\n", path)
+		fmt.Fprintf(cmd.OutOrStdout(), "Scheduled daily at %02d:%02d; runs at every login.\n", agentHour, agentMinute)
+		return nil
+	},
+}
+
+var uninstallAgentCmd = &cobra.Command{
+	Use:   "uninstall-agent",
+	Short: "Unload and remove the credswitch LaunchAgent",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := uninstallAgent()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Removed LaunchAgent at %s\n", path)
+		return nil
+	},
+}
+
 var reapCmd = &cobra.Command{
 	Use:   "reap",
 	Short: "Disable every enabled profile listed in ~/.credswitch/ephemeral",
@@ -196,7 +239,13 @@ func locationLabel(p Profile) string {
 }
 
 func init() {
-	rootCmd.AddCommand(initCmd, listCmd, enableCmd, disableCmd, syncCmd, revertCmd, reapCmd)
+	installAgentCmd.Flags().IntVar(&agentHour, "hour", 4, "hour (0–23) for the daily reap")
+	installAgentCmd.Flags().IntVar(&agentMinute, "minute", 0, "minute (0–59) for the daily reap")
+	rootCmd.AddCommand(
+		initCmd, listCmd, enableCmd, disableCmd,
+		syncCmd, revertCmd, reapCmd,
+		installAgentCmd, uninstallAgentCmd,
+	)
 }
 
 func main() {

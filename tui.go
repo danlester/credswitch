@@ -187,6 +187,12 @@ func (m tuiModel) View() string {
 		b.WriteString(errorStyle.Render("error: " + m.err.Error()))
 		b.WriteString("\n")
 	}
+	agentLine := "auto-reap: off (run `credswitch install-agent`)"
+	if agentInstalled() {
+		agentLine = "auto-reap: on"
+	}
+	b.WriteString(helpStyle.Render(agentLine))
+	b.WriteString("\n")
 	b.WriteString(helpStyle.Render("up/down move · space toggle · e ephemeral · s sync · r revert · q quit"))
 	b.WriteString("\n")
 	return b.String()

@@ -59,6 +59,8 @@ credswitch disable <name>   # remove <name> from the live AWS files
 credswitch sync <name>      # live -> master  (keep live, copy to master)
 credswitch revert <name>    # master -> live  (master wins; for orphans, removes from live)
 credswitch reap             # disable all profiles tagged ephemeral (see below)
+credswitch install-agent    # auto-run reap at login + first wake each day (macOS)
+credswitch uninstall-agent  # remove the LaunchAgent
 ```
 
 In the TUI: `space` toggle, `e` ephemeral on/off, `s` sync, `r` revert, `q` quit.
@@ -129,9 +131,27 @@ that are already disabled, or missing entirely, are silently ignored.
 
 `list` and the TUI show an `EPHEMERAL` annotation next to tagged profiles.
 
-To wire reap to a trigger, add a LaunchAgent that runs it at login and/or
-overnight. There's no installer for this yet — you write the plist
-yourself.
+#### Auto-reap on macOS
+
+```sh
+credswitch install-agent              # default: daily at 04:00 + every login
+credswitch install-agent --hour 3     # change the time
+credswitch uninstall-agent
+```
+
+This writes `~/Library/LaunchAgents/com.credswitch.reap.plist` pointing at
+the current binary and loads it via `launchctl`. The agent fires:
+
+- at every full login (`RunAtLoad`)
+- once per day at the scheduled time. **If the Mac is asleep at that time,
+  launchd fires the missed job on the next wake** — so picking a small-hours
+  time (default 04:00) effectively means "first unlock of the day".
+
+It is *not* per-unlock — a lunch-break unlock won't re-reap once the day's
+fire has happened. Logs go to `~/.credswitch/reap.log`.
+
+Re-run `install-agent` after upgrading or moving the binary (`go install`
+keeps the path stable at `~/go/bin/credswitch`, so this is rare).
 
 ### The `[default]` profile is special
 

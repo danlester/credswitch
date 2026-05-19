@@ -704,6 +704,65 @@ func TestToggleEphemeralRejectsDefault(t *testing.T) {
 	}
 }
 
+func TestRenderAgentPlistContents(t *testing.T) {
+	got := renderAgentPlist("/Users/dan/go/bin/credswitch", "/Users/dan/.credswitch/reap.log", 4, 30)
+	for _, want := range []string{
+		"<string>com.credswitch.reap</string>",
+		"<string>/Users/dan/go/bin/credswitch</string>",
+		"<string>reap</string>",
+		"<key>RunAtLoad</key>",
+		"<integer>4</integer>",
+		"<integer>30</integer>",
+		"<string>/Users/dan/.credswitch/reap.log</string>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("plist missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRenderAgentPlistEscapesXML(t *testing.T) {
+	got := renderAgentPlist("/tmp/weird&path", "/tmp/log<dir>", 0, 0)
+	if strings.Contains(got, "weird&path") {
+		t.Errorf("raw & not escaped: %s", got)
+	}
+	if !strings.Contains(got, "weird&amp;path") {
+		t.Errorf("expected &amp; escape: %s", got)
+	}
+	if strings.Contains(got, "log<dir>") {
+		t.Errorf("raw < not escaped: %s", got)
+	}
+}
+
+func TestWriteAgentRejectsBadTimes(t *testing.T) {
+	setupHome(t)
+	if _, err := writeAgent(defaultPaths(), 24, 0); err == nil {
+		t.Errorf("expected hour=24 to be rejected")
+	}
+	if _, err := writeAgent(defaultPaths(), 0, 60); err == nil {
+		t.Errorf("expected minute=60 to be rejected")
+	}
+}
+
+func TestWriteAgentWritesPlistFile(t *testing.T) {
+	home := setupHome(t)
+	path, err := writeAgent(defaultPaths(), 4, 30)
+	if err != nil {
+		t.Fatalf("writeAgent: %v", err)
+	}
+	wantPath := filepath.Join(home, "Library", "LaunchAgents", "com.credswitch.reap.plist")
+	if path != wantPath {
+		t.Errorf("plist path = %q, want %q", path, wantPath)
+	}
+	body := readFile(t, path)
+	if !strings.Contains(body, "<integer>4</integer>") || !strings.Contains(body, "<integer>30</integer>") {
+		t.Errorf("plist missing scheduled time:\n%s", body)
+	}
+	if !strings.Contains(body, filepath.Join(home, ".credswitch", "reap.log")) {
+		t.Errorf("plist missing expected log path:\n%s", body)
+	}
+}
+
 func TestSyncRequiresInit(t *testing.T) {
 	home := setupHome(t)
 	// No master dir.

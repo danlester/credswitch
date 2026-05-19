@@ -76,6 +76,17 @@ There's no separate package boundary. If this grows, the natural split is
   - In the TUI: `s` and `r` keys run sync and revert on the highlighted
     profile.
   - Manual deletion from `~/.aws/` is also fine.
+- **LaunchAgent (`install-agent` / `uninstall-agent`)**. `launchagent.go`
+  generates `~/Library/LaunchAgents/com.credswitch.reap.plist` with
+  `RunAtLoad` + `StartCalendarInterval` at a configurable HH:MM (default
+  04:00). The plist's binary path is frozen at install time via
+  `os.Executable()` + `EvalSymlinks`, so re-run after moving the binary.
+  `installAgent` shells out to `launchctl unload`/`load`; `writeAgent` is
+  separated so tests can pin plist contents without touching launchd. The
+  plist path resolves under `CREDSWITCH_HOME` when set, which keeps tests
+  out of the real `~/Library/LaunchAgents`. macOS-only — the install/
+  uninstall commands return a clear error on other OSes; the rest of the
+  tool stays cross-platform.
 - **Ephemeral profiles + `reap`**. `~/.credswitch/ephemeral` is an opt-in
   newline list of profile names (with `#` comments). `credswitch reap`
   disables every enabled+ephemeral profile by calling `disableProfile` on
