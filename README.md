@@ -58,9 +58,10 @@ credswitch enable <name>    # add <name> to the live AWS files
 credswitch disable <name>   # remove <name> from the live AWS files
 credswitch sync <name>      # live -> master  (keep live, copy to master)
 credswitch revert <name>    # master -> live  (master wins; for orphans, removes from live)
+credswitch reap             # disable all profiles tagged ephemeral (see below)
 ```
 
-In the TUI: `space` toggle, `s` sync, `r` revert, `q` quit.
+In the TUI: `space` toggle, `e` ephemeral on/off, `s` sync, `r` revert, `q` quit.
 
 Profile names are the **bare** name — `workstuffprod1`, not `profile workstuffprod1`.
 The `[default]` profile is always kept enabled and is **pass-through** (see below).
@@ -102,6 +103,35 @@ Both commands reduce the profile to a "clean" state, and `enable` /
 
 Drift on profile X never blocks operations on profile Y. Each profile is
 gated independently.
+
+### Ephemeral profiles
+
+Some profiles shouldn't sit enabled all day — high-blast-radius admin
+profiles you only enable for a quick task. Tag them as **ephemeral** and
+`credswitch reap` will disable them on demand (or on a schedule).
+
+To tag a profile: highlight it in the TUI and press `e`. It'll show an
+`EPHEMERAL` annotation. Press `e` again to untag.
+
+The list lives at `~/.credswitch/ephemeral` — one bare name per line, `#`
+comments allowed. You can edit it by hand too:
+
+```
+workstuffadmin
+prod-deploy
+# personal-aws  (commented out — not currently ephemeral)
+```
+
+`credswitch reap` disables every currently-enabled profile in that list.
+Profiles with drift or orphan state are skipped with a stderr warning —
+reap never clobbers live edits, consistent with the drift gate. Profiles
+that are already disabled, or missing entirely, are silently ignored.
+
+`list` and the TUI show an `EPHEMERAL` annotation next to tagged profiles.
+
+To wire reap to a trigger, add a LaunchAgent that runs it at login and/or
+overnight. There's no installer for this yet — you write the plist
+yourself.
 
 ### The `[default]` profile is special
 

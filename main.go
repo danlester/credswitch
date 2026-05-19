@@ -70,6 +70,9 @@ var listCmd = &cobra.Command{
 			case drifted[prof.Name]:
 				annot = "  DRIFTED"
 			}
+			if prof.Ephemeral {
+				annot += "  EPHEMERAL"
+			}
 			fmt.Fprintf(out, "[%s] %-30s %s%s\n", marker, prof.Name, locationLabel(prof), annot)
 		}
 		if len(drift) > 0 {
@@ -142,6 +145,35 @@ var disableCmd = &cobra.Command{
 	},
 }
 
+var reapCmd = &cobra.Command{
+	Use:   "reap",
+	Short: "Disable every enabled profile listed in ~/.credswitch/ephemeral",
+	Long: `reap disables every currently-enabled profile listed in
+~/.credswitch/ephemeral (one bare name per line; '#' comments allowed).
+
+Drifted or orphan profiles are skipped with a warning — resolve them with
+sync/revert first. Intended for automatic invocation via a LaunchAgent at
+login or overnight, but safe to run by hand.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		r, err := reapEphemeral(defaultPaths())
+		if err != nil {
+			return err
+		}
+		out := cmd.OutOrStdout()
+		errOut := cmd.ErrOrStderr()
+		for _, name := range r.Reaped {
+			fmt.Fprintf(out, "Disabled %s (ephemeral)\n", name)
+		}
+		for _, s := range r.Skipped {
+			fmt.Fprintf(errOut, "warning: skipped %s — %s\n", s.Name, s.Reason)
+		}
+		if len(r.Reaped) == 0 && len(r.Skipped) == 0 {
+			fmt.Fprintln(out, "Nothing to reap.")
+		}
+		return nil
+	},
+}
+
 func locationLabel(p Profile) string {
 	// For orphans, "where it exists" means the live files (master is empty
 	// for them by definition). For master-known profiles, show the master
@@ -164,7 +196,7 @@ func locationLabel(p Profile) string {
 }
 
 func init() {
-	rootCmd.AddCommand(initCmd, listCmd, enableCmd, disableCmd, syncCmd, revertCmd)
+	rootCmd.AddCommand(initCmd, listCmd, enableCmd, disableCmd, syncCmd, revertCmd, reapCmd)
 }
 
 func main() {

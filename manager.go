@@ -10,11 +10,12 @@ import (
 const defaultProfile = "default"
 
 type Paths struct {
-	MasterDir   string
-	MasterConf  string
-	MasterCreds string
-	LiveConf    string
-	LiveCreds   string
+	MasterDir     string
+	MasterConf    string
+	MasterCreds   string
+	LiveConf      string
+	LiveCreds     string
+	EphemeralList string
 }
 
 func defaultPaths() Paths {
@@ -23,11 +24,12 @@ func defaultPaths() Paths {
 		home, _ = os.UserHomeDir()
 	}
 	return Paths{
-		MasterDir:   filepath.Join(home, ".credswitch"),
-		MasterConf:  filepath.Join(home, ".credswitch", "config"),
-		MasterCreds: filepath.Join(home, ".credswitch", "credentials"),
-		LiveConf:    filepath.Join(home, ".aws", "config"),
-		LiveCreds:   filepath.Join(home, ".aws", "credentials"),
+		MasterDir:     filepath.Join(home, ".credswitch"),
+		MasterConf:    filepath.Join(home, ".credswitch", "config"),
+		MasterCreds:   filepath.Join(home, ".credswitch", "credentials"),
+		LiveConf:      filepath.Join(home, ".aws", "config"),
+		LiveCreds:     filepath.Join(home, ".aws", "credentials"),
+		EphemeralList: filepath.Join(home, ".credswitch", "ephemeral"),
 	}
 }
 
@@ -41,6 +43,9 @@ type Profile struct {
 	// fields so the loop in `list` doesn't recompute on each access.
 	Enabled bool
 	Orphan  bool
+	// Ephemeral is true when the profile is listed in ~/.credswitch/ephemeral
+	// and is therefore a target for `credswitch reap`.
+	Ephemeral bool
 }
 
 type State struct {
@@ -69,6 +74,10 @@ func loadState(p Paths) (*State, error) {
 	mr := nameSet(masterCreds)
 	lc := nameSet(liveConf)
 	lr := nameSet(liveCreds)
+	eph, err := loadEphemeral(p)
+	if err != nil {
+		return nil, err
+	}
 
 	seen := map[string]bool{}
 	var profiles []Profile
@@ -84,6 +93,7 @@ func loadState(p Paths) (*State, error) {
 			InMasterCreds:  mr[name],
 			InLiveConfig:   lc[name],
 			InLiveCreds:    lr[name],
+			Ephemeral:      eph[name],
 		}
 		// Default is special: it's pass-through, never an orphan, always
 		// considered enabled.
@@ -555,4 +565,137 @@ func copyIfExists(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, data, 0o600)
+}
+
+// loadEphemeral reads the set of profile names tagged for auto-reap from
+// ~/.credswitch/ephemeral. One name per line; blank lines and `#` comments
+// are ignored. A missing file is not an error — opt-in feature.
+func loadEphemeral(p Paths) (map[string]bool, error) {
+	set := map[string]bool{}
+	data, err := os.ReadFile(p.EphemeralList)
+	if os.IsNotExist(err) {
+		return set, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		set[line] = true
+	}
+	return set, nil
+}
+
+// toggleEphemeral flips whether `name` is tagged in ~/.credswitch/ephemeral.
+// Returns the new state. Preserves comments, blank lines, and the relative
+// order of other entries — only the toggled name is added or removed.
+// Refuses on default (pass-through can't be ephemeral); allows any other
+// name (including orphans — reap will skip them at run time).
+func toggleEphemeral(p Paths, name string) (bool, error) {
+	if name == defaultProfile {
+		return false, fmt.Errorf("default profile cannot be ephemeral")
+	}
+	if _, err := os.Stat(p.MasterDir); os.IsNotExist(err) {
+		return false, fmt.Errorf("%s does not exist; run `credswitch init` first", p.MasterDir)
+	}
+
+	var lines []string
+	data, err := os.ReadFile(p.EphemeralList)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	if err == nil {
+		raw := strings.TrimRight(string(data), "\n")
+		if raw != "" {
+			lines = strings.Split(raw, "\n")
+		}
+	}
+
+	found := false
+	kept := lines[:0]
+	for _, line := range lines {
+		if strings.TrimSpace(line) == name {
+			found = true
+			continue
+		}
+		kept = append(kept, line)
+	}
+	lines = kept
+
+	nowEphemeral := !found
+	if nowEphemeral {
+		lines = append(lines, name)
+	}
+
+	var buf strings.Builder
+	for _, line := range lines {
+		buf.WriteString(line)
+		buf.WriteByte('\n')
+	}
+	return nowEphemeral, atomicWrite(p.EphemeralList, []byte(buf.String()))
+}
+
+// ReapResult summarises one run of reapEphemeral.
+type ReapResult struct {
+	Reaped  []string   // disabled successfully
+	Skipped []ReapSkip // ephemeral but left enabled, with reason
+}
+
+type ReapSkip struct {
+	Name   string
+	Reason string
+}
+
+// reapEphemeral disables every currently-enabled profile tagged in the
+// ephemeral list. Drifted/orphan profiles are skipped (consistent with the
+// strict drift gate — clobbering live edits is exactly what we must not do
+// silently). Unknown names in the list are silently ignored.
+func reapEphemeral(p Paths) (ReapResult, error) {
+	var r ReapResult
+	eph, err := loadEphemeral(p)
+	if err != nil {
+		return r, err
+	}
+	if len(eph) == 0 {
+		return r, nil
+	}
+	st, err := loadState(p)
+	if err != nil {
+		return r, err
+	}
+	drift, err := loadDrift(p)
+	if err != nil {
+		return r, err
+	}
+	drifted := driftedNames(drift)
+
+	for _, prof := range st.Profiles {
+		if !eph[prof.Name] {
+			continue
+		}
+		if prof.Name == defaultProfile {
+			r.Skipped = append(r.Skipped, ReapSkip{prof.Name, "default is pass-through; cannot be ephemeral"})
+			continue
+		}
+		if !prof.Enabled {
+			continue
+		}
+		if prof.Orphan {
+			r.Skipped = append(r.Skipped, ReapSkip{prof.Name, "orphan in live; resolve with sync/revert"})
+			continue
+		}
+		if drifted[prof.Name] {
+			r.Skipped = append(r.Skipped, ReapSkip{prof.Name, "drifted from master; resolve with sync/revert"})
+			continue
+		}
+		if err := disableProfile(p, prof.Name); err != nil {
+			r.Skipped = append(r.Skipped, ReapSkip{prof.Name, err.Error()})
+			continue
+		}
+		r.Reaped = append(r.Reaped, prof.Name)
+	}
+	return r, nil
 }

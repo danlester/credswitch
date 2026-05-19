@@ -15,8 +15,9 @@ var (
 	disabledStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	helpStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	orphanStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214")) // amber
-	driftStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	orphanStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")) // amber
+	driftStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	ephemeralStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("13")) // magenta
 )
 
 type tuiModel struct {
@@ -77,6 +78,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.runOnCurrent(syncAction)
 	case "r":
 		return m.runOnCurrent(revertAction)
+	case "e":
+		return m.runOnCurrent(ephemeralAction)
 	}
 	return m, nil
 }
@@ -87,6 +90,7 @@ const (
 	toggleAction tuiAction = iota
 	syncAction
 	revertAction
+	ephemeralAction
 )
 
 func (m tuiModel) runOnCurrent(action tuiAction) (tea.Model, tea.Cmd) {
@@ -110,6 +114,8 @@ func (m tuiModel) runOnCurrent(action tuiAction) (tea.Model, tea.Cmd) {
 		err = syncToMaster(m.paths, prof.Name)
 	case revertAction:
 		err = revertProfile(m.paths, prof.Name)
+	case ephemeralAction:
+		_, err = toggleEphemeral(m.paths, prof.Name)
 	}
 	if err != nil {
 		m.err = err
@@ -164,6 +170,9 @@ func (m tuiModel) View() string {
 		case m.drifted[p.Name]:
 			annot = "  " + driftStyle.Render("DRIFTED")
 		}
+		if p.Ephemeral {
+			annot += "  " + ephemeralStyle.Render("EPHEMERAL")
+		}
 		fmt.Fprintf(&b, "%s%s %s %s%s\n",
 			cursor,
 			mark,
@@ -178,7 +187,7 @@ func (m tuiModel) View() string {
 		b.WriteString(errorStyle.Render("error: " + m.err.Error()))
 		b.WriteString("\n")
 	}
-	b.WriteString(helpStyle.Render("up/down move · space toggle · s sync · r revert · q quit"))
+	b.WriteString(helpStyle.Render("up/down move · space toggle · e ephemeral · s sync · r revert · q quit"))
 	b.WriteString("\n")
 	return b.String()
 }

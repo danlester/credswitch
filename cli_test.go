@@ -548,6 +548,162 @@ func TestWritesAreAtomicAndPrivate(t *testing.T) {
 	}
 }
 
+func TestReapDisablesEphemeralEnabled(t *testing.T) {
+	home := setupHome(t)
+	seedMaster(t, home)
+	if _, _, err := runCLI(t, "enable", "foo"); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if _, _, err := runCLI(t, "enable", "bar"); err != nil {
+		t.Fatalf("enable bar: %v", err)
+	}
+	writeFile(t, filepath.Join(home, ".credswitch", "ephemeral"), "foo\n# bar is intentionally not ephemeral\n")
+
+	stdout, _, err := runCLI(t, "reap")
+	if err != nil {
+		t.Fatalf("reap: %v", err)
+	}
+	if !strings.Contains(stdout, "Disabled foo") {
+		t.Errorf("expected foo reaped; got: %q", stdout)
+	}
+	if strings.Contains(readFile(t, filepath.Join(home, ".aws", "config")), "[profile foo]") {
+		t.Errorf("foo still in live config after reap")
+	}
+	if !strings.Contains(readFile(t, filepath.Join(home, ".aws", "config")), "[profile bar]") {
+		t.Errorf("bar (non-ephemeral) should remain enabled")
+	}
+}
+
+func TestReapSkipsDrifted(t *testing.T) {
+	home := setupHome(t)
+	seedMaster(t, home)
+	if _, _, err := runCLI(t, "enable", "foo"); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	writeFile(t, filepath.Join(home, ".aws", "config"), liveDefaultOnlyConfig+`
+[profile foo]
+region = somewhere-else
+`)
+	writeFile(t, filepath.Join(home, ".credswitch", "ephemeral"), "foo\n")
+
+	stdout, stderr, err := runCLI(t, "reap")
+	if err != nil {
+		t.Fatalf("reap: %v", err)
+	}
+	if strings.Contains(stdout, "Disabled foo") {
+		t.Errorf("drifted profile must not be reaped; stdout:\n%s", stdout)
+	}
+	if !strings.Contains(stderr, "skipped foo") || !strings.Contains(stderr, "drifted") {
+		t.Errorf("expected skip warning for drifted foo; stderr:\n%s", stderr)
+	}
+	if !strings.Contains(readFile(t, filepath.Join(home, ".aws", "config")), "region = somewhere-else") {
+		t.Errorf("reap clobbered drifted live content")
+	}
+}
+
+func TestReapNoListIsNoop(t *testing.T) {
+	home := setupHome(t)
+	seedMaster(t, home)
+	if _, _, err := runCLI(t, "enable", "foo"); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+
+	stdout, _, err := runCLI(t, "reap")
+	if err != nil {
+		t.Fatalf("reap: %v", err)
+	}
+	if !strings.Contains(stdout, "Nothing to reap") {
+		t.Errorf("expected nothing-to-reap message; got: %q", stdout)
+	}
+	if !strings.Contains(readFile(t, filepath.Join(home, ".aws", "config")), "[profile foo]") {
+		t.Errorf("foo wrongly disabled by no-op reap")
+	}
+}
+
+func TestReapIgnoresDisabledEphemeral(t *testing.T) {
+	home := setupHome(t)
+	seedMaster(t, home)
+	// foo is in master but not enabled in live.
+	writeFile(t, filepath.Join(home, ".credswitch", "ephemeral"), "foo\n")
+
+	stdout, _, err := runCLI(t, "reap")
+	if err != nil {
+		t.Fatalf("reap: %v", err)
+	}
+	if strings.Contains(stdout, "Disabled foo") {
+		t.Errorf("disabled-already foo should not be reported as reaped; stdout:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "Nothing to reap") {
+		t.Errorf("expected nothing-to-reap; got: %q", stdout)
+	}
+}
+
+func TestListShowsEphemeralAnnotation(t *testing.T) {
+	home := setupHome(t)
+	seedMaster(t, home)
+	writeFile(t, filepath.Join(home, ".credswitch", "ephemeral"), "foo\n")
+
+	stdout, _, err := runCLI(t, "list")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, line := range strings.Split(stdout, "\n") {
+		if strings.Contains(line, " foo ") {
+			if !strings.Contains(line, "EPHEMERAL") {
+				t.Errorf("expected EPHEMERAL on foo line; got: %q", line)
+			}
+		}
+		if strings.Contains(line, " bar ") && strings.Contains(line, "EPHEMERAL") {
+			t.Errorf("bar should not be marked ephemeral; line: %q", line)
+		}
+	}
+}
+
+func TestToggleEphemeralRoundtrip(t *testing.T) {
+	home := setupHome(t)
+	seedMaster(t, home)
+	// Seed file with a comment and an existing entry to make sure they survive.
+	writeFile(t, filepath.Join(home, ".credswitch", "ephemeral"), "# admin profiles\nbar\n")
+
+	on, err := toggleEphemeral(defaultPaths(), "foo")
+	if err != nil {
+		t.Fatalf("toggle on: %v", err)
+	}
+	if !on {
+		t.Errorf("expected foo to be tagged on first toggle")
+	}
+	got := readFile(t, filepath.Join(home, ".credswitch", "ephemeral"))
+	if !strings.Contains(got, "# admin profiles") {
+		t.Errorf("comment lost after toggle: %q", got)
+	}
+	if !strings.Contains(got, "bar") || !strings.Contains(got, "foo") {
+		t.Errorf("expected bar and foo in list: %q", got)
+	}
+
+	off, err := toggleEphemeral(defaultPaths(), "foo")
+	if err != nil {
+		t.Fatalf("toggle off: %v", err)
+	}
+	if off {
+		t.Errorf("expected foo to be untagged on second toggle")
+	}
+	got = readFile(t, filepath.Join(home, ".credswitch", "ephemeral"))
+	if strings.Contains(got, "foo") {
+		t.Errorf("foo not removed: %q", got)
+	}
+	if !strings.Contains(got, "bar") {
+		t.Errorf("bar wrongly removed: %q", got)
+	}
+}
+
+func TestToggleEphemeralRejectsDefault(t *testing.T) {
+	setupHome(t)
+	writeFile(t, filepath.Join(os.Getenv("CREDSWITCH_HOME"), ".credswitch", "config"), "")
+	if _, err := toggleEphemeral(defaultPaths(), "default"); err == nil {
+		t.Fatal("expected default to be rejected")
+	}
+}
+
 func TestSyncRequiresInit(t *testing.T) {
 	home := setupHome(t)
 	// No master dir.

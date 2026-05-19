@@ -76,6 +76,17 @@ There's no separate package boundary. If this grows, the natural split is
   - In the TUI: `s` and `r` keys run sync and revert on the highlighted
     profile.
   - Manual deletion from `~/.aws/` is also fine.
+- **Ephemeral profiles + `reap`**. `~/.credswitch/ephemeral` is an opt-in
+  newline list of profile names (with `#` comments). `credswitch reap`
+  disables every enabled+ephemeral profile by calling `disableProfile` on
+  each. Drift/orphan state causes reap to skip with a stderr warning —
+  it never bypasses the drift gate. `loadEphemeral` returns an empty set
+  when the file is missing (feature is invisible until used). `Profile`
+  carries an `Ephemeral` bool populated by `loadState`; `list` and the
+  TUI render an `EPHEMERAL` annotation. The TUI `e` key calls
+  `toggleEphemeral`, which preserves comments and other entries — only
+  the toggled name is added or removed. No LaunchAgent installer ships
+  with the tool — wiring reap to login/overnight is left to the user.
 
 ## Running locally
 
